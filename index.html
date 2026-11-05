@@ -272,13 +272,22 @@
   }
 
   // ---------- GPS: 20 nearest stations (List tab) ----------
-  function getPosition() {
+  function geoOnce(opts) {
     return new Promise((resolve, reject) => {
       if (!navigator.geolocation) return reject(new Error("no geolocation"));
       navigator.geolocation.getCurrentPosition(
-        p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
-        reject, { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 });
+        p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }), reject, opts);
     });
+  }
+  async function getPosition() {
+    try {
+      // Precise GPS first, but don't wait forever indoors
+      return await geoOnce({ enableHighAccuracy: true, timeout: 8000, maximumAge: 120000 });
+    } catch (e) {
+      if (e && e.code === 1) throw e;            // blocked: retrying won't help
+      // Fall back to network (Wi-Fi/cell) location, which is faster and works indoors
+      return await geoOnce({ enableHighAccuracy: false, timeout: 20000, maximumAge: 600000 });
+    }
   }
 
   async function permState() {
@@ -289,11 +298,11 @@
     $("geoHelp").textContent = msg || "";
     $("geoBox").classList.toggle("hidden", !msg);
   }
-  const BLOCKED_HELP = "Location is blocked for this site. Click the icon at the left of the address bar " +
-    "(🔒 or the settings slider) → Site settings → Location → Allow, then reload the page.";
-  const OS_HELP = "Your browser allows it, but the computer didn't give a location. Turn on location services: " +
-    "Windows: Settings → Privacy & security → Location (turn on, and allow desktop apps). " +
-    "Mac: System Settings → Privacy & Security → Location Services → turn on for your browser. Then press the button again.";
+  const BLOCKED_HELP = "Location is blocked for this site. Tap the icon at the left of the address bar " +
+    "→ Permissions (or Site settings) → Location → Allow, then reload. If it's already allowed there, " +
+    "check Android Settings → Apps → Chrome → Permissions → Location → Allow.";
+  const OS_HELP = "The browser is allowed, but the phone didn't give a location. Turn on Location in Android's " +
+    "quick settings, and check Android Settings → Apps → Chrome → Permissions → Location is allowed. Then press the button again.";
 
   async function refreshNear(force, fromClick=false) {
     showGeoHelp("");
@@ -307,7 +316,7 @@
     setStatus(state === "prompt" ? "Waiting for you to allow location access…" : "Finding your location…");
     try { myPos = await getPosition(); }
     catch (e) {
-      setStatus("Couldn't get your location.", true);
+      setStatus(`Couldn't get your location (error ${e?.code ?? "?"}: ${e?.message || "unknown"}).`, true);
       if (e && e.code === 1) showGeoHelp((await permState()) === "denied" ? BLOCKED_HELP
         : "The location request was dismissed or blocked. Press the button and choose Allow.");
       else if (e && e.code === 2) showGeoHelp(OS_HELP);
