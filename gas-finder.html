@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gas Finder</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --muted:#667085; --line:#e4e7ec;
+    --accent:#0b6bcb; --accent-ink:#fff; --good:#12805c; --warn:#b54708;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#0f1216; --card:#181c22; --ink:#e8eaed; --muted:#98a2b3; --line:#2a3039;
+      --accent:#4c9ffe; --accent-ink:#0b1220; --good:#3ccf91; --warn:#f5a524; }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  body{display:flex;flex-direction:column}
+  header{display:flex;gap:8px;align-items:center;padding:10px 12px;background:var(--card);
+    border-bottom:1px solid var(--line);flex-wrap:wrap}
+  header h1{font-size:17px;margin:0 auto 0 0}
+  select,button,input,textarea{font:inherit;color:inherit}
+  select,input[type=text],input[type=password],input[type=number],textarea{
+    background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+  button{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer}
+  button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+  .tabs{display:flex;background:var(--card);border-bottom:1px solid var(--line)}
+  .tabs button{flex:1;border:0;border-radius:0;background:none;padding:10px;color:var(--muted);
+    border-bottom:2px solid transparent}
+  .tabs button.on{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
+  main{flex:1;position:relative;min-height:0}
+  #list,#mapWrap{position:absolute;inset:0}
+  #list{overflow:auto;padding:8px 10px 24px}
+  #map{position:absolute;inset:0}
+  #searchHere{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:5;display:none;
+    box-shadow:0 2px 8px rgba(0,0,0,.25)}
+  .hidden{display:none!important}
+  .status{color:var(--muted);padding:10px 4px;font-size:14px}
+  .status.err{color:var(--warn)}
+  .st{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;
+    margin:8px 0;display:grid;grid-template-columns:1fr auto;gap:2px 10px}
+  .st .name{font-weight:600}
+  .st .addr{color:var(--muted);font-size:13px;grid-column:1}
+  .st .price{grid-row:1 / span 2;grid-column:2;text-align:right;font-size:20px;font-weight:700;white-space:nowrap}
+  .st .price small{display:block;font-size:12px;font-weight:400;color:var(--muted)}
+  .st .price.none{font-size:14px;font-weight:400;color:var(--muted)}
+  .st .meta{grid-column:1 / -1;display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:14px}
+  .st .drive{color:var(--ink)}
+  .st a.nav{color:var(--accent);text-decoration:none;font-weight:600}
+  .st.best{border-color:var(--good)}
+  .st.best .price{color:var(--good)}
+  .pin{background:var(--card);color:var(--ink);border:2px solid var(--accent);border-radius:14px;
+    padding:2px 7px;font-weight:700;font-size:13px;box-shadow:0 1px 4px rgba(0,0,0,.3);white-space:nowrap}
+  .pin.none{border-color:var(--muted);color:var(--muted);font-weight:400}
+  .pin.best{border-color:var(--good);color:var(--good)}
+  .me{width:14px;height:14px;border-radius:50%;background:#1a73e8;border:3px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.3)}
+  dialog{border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--ink);
+    width:min(520px,94vw);padding:16px}
+  dialog::backdrop{background:rgba(0,0,0,.45)}
+  dialog label{display:block;margin:12px 0 4px;font-weight:600;font-size:14px}
+  dialog .hint{color:var(--muted);font-size:13px;margin-top:3px}
+  dialog input,dialog textarea{width:100%}
+  dialog textarea{min-height:130px}
+  .row{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+  .iw{color:#1b1f24;font-size:14px;max-width:240px}
+  .iw b{display:block;margin-bottom:2px}
+  .iw a{color:#0b6bcb;font-weight:600}
+</style>
+</head>
+<body>
+<header>
+  <h1>⛽ Gas Finder</h1>
+  <select id="fuel" aria-label="Fuel type">
+    <option value="REGULAR_UNLEADED">Regular</option>
+    <option value="MIDGRADE">Midgrade</option>
+    <option value="PREMIUM">Premium</option>
+    <option value="DIESEL">Diesel</option>
+    <option value="E85">E85</option>
+  </select>
+  <select id="sort" aria-label="Sort">
+    <option value="price">Cheapest</option>
+    <option value="drive">Closest drive</option>
+  </select>
+  <button id="locate" title="Search around my location">📍</button>
+  <button id="openSettings" title="Settings">⚙️</button>
+</header>
+<div class="tabs">
+  <button id="tabList" class="on">List</button>
+  <button id="tabMap">Map</button>
+</div>
+<main>
+  <div id="list"><div class="status" id="status">Starting…</div><div id="items"></div></div>
+  <div id="mapWrap" class="hidden">
+    <div id="map"></div>
+    <button id="searchHere" class="primary">Search this area</button>
+  </div>
+</main>
+
+<dialog id="settings">
+  <h2 style="margin:0 0 4px;font-size:18px">Settings</h2>
+  <label for="apiKey">Google Maps API key</label>
+  <input id="apiKey" type="password" autocomplete="off" placeholder="AIza…">
+  <div class="hint">Needs Maps JavaScript API, Places API (New) and Routes API turned on. Stored only in this browser.</div>
+
+  <label for="blocklist">Never show stations matching (one per line)</label>
+  <textarea id="blocklist"></textarea>
+  <div class="hint">Matches whole words in the station name, case-insensitive. Everything else always shows, wherever you search.</div>
+
+  <label for="radius">Search radius (miles)</label>
+  <input id="radius" type="number" min="1" max="31" step="1">
+  <div class="hint">Up to 31 miles. Google returns at most 20 stations per search, nearest first.</div>
+
+  <label style="display:flex;gap:8px;align-items:center;font-weight:400">
+    <input id="hideNoPrice" type="checkbox" style="width:auto"> Hide stations with no price for this fuel
+  </label>
+
+  <div class="row">
+    <button id="cancelSettings">Cancel</button>
+    <button id="saveSettings" class="primary">Save</button>
+  </div>
+</dialog>
+
+<script>
+(() => {
+  // ---------- settings (localStorage is optional; everything works without it) ----------
+  const DEFAULTS = {
+    apiKey: "",
+    blocklist: ["Costco", "Sam's Club", "MCX", "Marine Corps Exchange", "Marine Mart"],
+    radiusMi: 10,
+    fuel: "REGULAR_UNLEADED",
+    sort: "price",
+    hideNoPrice: false,
+    lastCenter: null
+  };
+  const store = {
+    get() {
+      try { return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem("gasFinder") || "{}")); }
+      catch { return Object.assign({}, DEFAULTS); }
+    },
+    set(s) { try { localStorage.setItem("gasFinder", JSON.stringify(s)); } catch {} }
+  };
+  let S = store.get();
+
+  const $ = id => document.getElementById(id);
+  const statusEl = $("status"), itemsEl = $("items");
+  const setStatus = (msg, err=false) => { statusEl.textContent = msg; statusEl.classList.toggle("err", err); statusEl.classList.toggle("hidden", !msg); };
+
+  $("fuel").value = S.fuel;
+  $("sort").value = S.sort;
+
+  // ---------- state ----------
+  let map, PlaceCls, RankPref, RouteMatrix, AdvMarker;
+  let myPos = null;            // last known device location
+  let searchCenter = null;     // where the last search ran
+  let stations = [];           // processed results of the last search
+  let markers = [], meMarker = null, infoWin = null;
+
+  // ---------- helpers ----------
+  const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const norm = s => (s || "").replace(/[‘’]/g, "'");
+  function isBlocked(name) {
+    const n = norm(name);
+    return S.blocklist.some(t => {
+      t = norm(t).trim(); if (!t) return false;
+      return new RegExp("(^|[^\\w])" + escapeRe(t) + "($|[^\\w])", "i").test(n);
+    });
+  }
+  function moneyToNum(m) {
+    if (m == null) return null;
+    if (typeof m === "number") return m;
+    const u = Number(m.units ?? 0), n = Number(m.nanos ?? 0);
+    const v = u + n / 1e9;
+    return Number.isFinite(v) && v > 0 ? v : null;
+  }
+  function ago(d) {
+    if (!d) return "";
+    const t = (d instanceof Date ? d : new Date(d)).getTime();
+    if (!Number.isFinite(t)) return "";
+    const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+    if (mins < 60) return mins + "m ago";
+    const h = Math.round(mins / 60);
+    if (h < 48) return h + "h ago";
+    return Math.round(h / 24) + "d ago";
+  }
+  const miles = m => (m / 1609.344);
+  function fmtDrive(s) {
+    if (s.driveMeters == null) return s.routeFailed ? "No drive route" : "Drive distance…";
+    const mi = miles(s.driveMeters);
+    const min = Math.max(1, Math.round(s.driveSecs / 60));
+    return (mi < 10 ? mi.toFixed(1) : Math.round(mi)) + " mi · " + min + " min drive";
+  }
+  const navUrl = s => "https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=" +
+    s.lat + "," + s.lng + "&destination_place_id=" + encodeURIComponent(s.id);
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+  // ---------- Google Maps loading ----------
+  function loadMaps(key) {
+    return new Promise((resolve, reject) => {
+      window.__gfReady = resolve;
+      window.gm_authFailure = () => setStatus("Google rejected the API key. Check it's valid, the three APIs are enabled, and this site is allowed under the key's restrictions.", true);
+      const s = document.createElement("script");
+      s.src = "https://maps.googleapis.com/maps/api/js?key=" + encodeURIComponent(key) +
+              "&v=weekly&loading=async&callback=__gfReady";
+      s.async = true;
+      s.onerror = () => reject(new Error("Couldn't load Google Maps. Check your connection."));
+      document.head.append(s);
+    });
+  }
+
+  async function init() {
+    if (!S.apiKey) { setStatus("Add your Google Maps API key in ⚙️ Settings to get started."); openSettings(); return; }
+    setStatus("Loading Google Maps…");
+    try { await loadMaps(S.apiKey); }
+    catch (e) { setStatus(e.message, true); return; }
+
+    const { Map } = await google.maps.importLibrary("maps");
+    ({ Place: PlaceCls, SearchNearbyRankPreference: RankPref } = await google.maps.importLibrary("places"));
+    ({ RouteMatrix } = await google.maps.importLibrary("routes"));
+    ({ AdvancedMarkerElement: AdvMarker } = await google.maps.importLibrary("marker"));
+
+    const start = S.lastCenter || { lat: 39.5, lng: -98.35 };
+    map = new Map($("map"), {
+      center: start, zoom: S.lastCenter ? 12 : 4, mapId: "DEMO_MAP_ID",
+      disableDefaultUI: true, zoomControl: true, gestureHandling: "greedy", clickableIcons: false
+    });
+    infoWin = new google.maps.InfoWindow();
+    map.addListener("dragend", () => { $("searchHere").style.display = "block"; });
+
+    locateAndSearch(true);
+  }
+
+  // ---------- location ----------
+  function getPosition() {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) return reject(new Error("no geolocation"));
+      navigator.geolocation.getCurrentPosition(
+        p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
+        err => reject(err), { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
+    });
+  }
+  async function locateAndSearch(initial=false) {
+    setStatus("Finding your location…");
+    try {
+      myPos = await getPosition();
+      showMe();
+      map.setCenter(myPos); map.setZoom(12);
+      search(myPos);
+    } catch {
+      if (S.lastCenter) { setStatus(""); search(S.lastCenter); }
+      else setStatus(initial
+        ? "Location unavailable. Open the Map tab, move to an area and tap “Search this area”."
+        : "Couldn't get your location. Allow location access for this page, or search from the Map tab.", true);
+    }
+  }
+  function showMe() {
+    if (!myPos || !map) return;
+    const el = document.createElement("div"); el.className = "me";
+    if (meMarker) meMarker.map = null;
+    meMarker = new AdvMarker({ map, position: myPos, content: el, title: "You", zIndex: 1000 });
+  }
+
+  // ---------- search ----------
+  let searchSeq = 0;
+  async function search(center) {
+    const seq = ++searchSeq;
+    searchCenter = center;
+    S.lastCenter = center; store.set(S);
+    $("searchHere").style.display = "none";
+    hiddenNote = ""; driveNote = "";
+    itemsEl.innerHTML = "";
+    setStatus("Searching for stations…");
+
+    let places;
+    try {
+      const radius = Math.min(50000, Math.max(1609, Math.round((Number(S.radiusMi) || 10) * 1609.344)));
+      ({ places } = await PlaceCls.searchNearby({
+        fields: ["id", "displayName", "location", "formattedAddress", "fuelOptions"],
+        locationRestriction: { center, radius },
+        includedPrimaryTypes: ["gas_station"],
+        maxResultCount: 20,
+        rankPreference: RankPref.DISTANCE
+      }));
+    } catch (e) {
+      if (seq === searchSeq) setStatus("Station search failed: " + (e.message || e) + " (Is Places API (New) enabled for this key?)", true);
+      return;
+    }
+    if (seq !== searchSeq) return;
+
+    let hiddenCount = 0;
+    stations = (places || []).filter(p => {
+      if (isBlocked(p.displayName)) { hiddenCount++; return false; }
+      return true;
+    }).map(p => {
+      const prices = {};
+      for (const fp of (p.fuelOptions?.fuelPrices || [])) {
+        const v = moneyToNum(fp.price);
+        if (v != null) prices[String(fp.type)] = { price: v, updated: fp.updateTime };
+      }
+      return {
+        id: p.id, name: p.displayName, addr: p.formattedAddress,
+        lat: p.location.lat(), lng: p.location.lng(), prices,
+        driveMeters: null, driveSecs: null, routeFailed: false
+      };
+    });
+
+    hiddenNote = hiddenCount ? ` · ${hiddenCount} blocked station${hiddenCount > 1 ? "s" : ""} hidden` : "";
+    render();
+    fitMap();
+
+    // Driving distance from you (or from the search point if location is unknown)
+    const origin = myPos || center;
+    if (!stations.length) return;
+    try {
+      const { matrix } = await RouteMatrix.computeRouteMatrix({
+        origins: [origin],
+        destinations: stations.map(s => ({ lat: s.lat, lng: s.lng })),
+        travelMode: "DRIVING",
+        fields: ["distanceMeters", "durationMillis", "condition"]
+      });
+      if (seq !== searchSeq) return;
+      const items = matrix?.rows?.[0]?.items || [];
+      items.forEach((it, i) => {
+        const s = stations[i]; if (!s) return;
+        if (it && it.distanceMeters != null && String(it.condition ?? "ROUTE_EXISTS") === "ROUTE_EXISTS") {
+          s.driveMeters = it.distanceMeters;
+          s.driveSecs = (it.durationMillis ?? 0) / 1000;
+        } else s.routeFailed = true;
+      });
+      driveNote = myPos ? "" : " · drive distances from the search point (location off)";
+    } catch (e) {
+      stations.forEach(s => s.routeFailed = true);
+      driveNote = " · drive distances unavailable (is Routes API enabled?)";
+    }
+    render();
+  }
+  let hiddenNote = "", driveNote = "";
+
+  // ---------- rendering ----------
+  function sorted() {
+    const fuel = S.fuel;
+    let list = stations.slice();
+    if (S.hideNoPrice) list = list.filter(s => s.prices[fuel]);
+    const p = s => s.prices[fuel]?.price ?? Infinity;
+    const d = s => s.driveMeters ?? Infinity;
+    list.sort(S.sort === "price" ? (a, b) => (p(a) - p(b)) || (d(a) - d(b))
+                                 : (a, b) => (d(a) - d(b)) || (p(a) - p(b)));
+    return list;
+  }
+
+  function render() {
+    const fuel = S.fuel, list = sorted();
+    const min = Math.min(...list.map(s => s.prices[fuel]?.price ?? Infinity));
+    if (!list.length) {
+      itemsEl.innerHTML = "";
+      setStatus(stations.length ? "No stations with a price for this fuel nearby." + hiddenNote
+                                : "No stations found in this area." + hiddenNote);
+    } else {
+      const priced = list.filter(s => s.prices[fuel]).length;
+      setStatus(`${list.length} stations · ${priced} with ${$("fuel").selectedOptions[0].text.toLowerCase()} prices${hiddenNote}${driveNote}`);
+      itemsEl.innerHTML = list.map(s => {
+        const fp = s.prices[fuel];
+        const best = fp && fp.price === min;
+        const price = fp
+          ? `<div class="price">$${fp.price.toFixed(2)}<small>${esc(ago(fp.updated))}</small></div>`
+          : `<div class="price none">No price</div>`;
+        return `<div class="st${best ? " best" : ""}">
+          <div class="name">${esc(s.name)}</div>${price}
+          <div class="addr">${esc(s.addr)}</div>
+          <div class="meta"><span class="drive">${esc(fmtDrive(s))}</span>
+            <a class="nav" href="${navUrl(s)}" target="_blank" rel="noopener">Navigate ›</a></div>
+        </div>`;
+      }).join("");
+    }
+    drawMarkers(list, min);
+  }
+
+  function drawMarkers(list, min) {
+    if (!map) return;
+    markers.forEach(m => m.map = null); markers = [];
+    const fuel = S.fuel;
+    for (const s of list) {
+      const fp = s.prices[fuel];
+      const el = document.createElement("div");
+      el.className = "pin" + (fp ? (fp.price === min ? " best" : "") : " none");
+      el.textContent = fp ? "$" + fp.price.toFixed(2) : "—";
+      const m = new AdvMarker({ map, position: { lat: s.lat, lng: s.lng }, content: el, title: s.name, gmpClickable: true });
+      m.addListener("click", () => {
+        infoWin.setContent(`<div class="iw"><b>${esc(s.name)}</b>${fp ? "$" + fp.price.toFixed(2) + " · " + esc(ago(fp.updated)) + "<br>" : ""}${esc(fmtDrive(s))}<br><a href="${navUrl(s)}" target="_blank" rel="noopener">Navigate ›</a></div>`);
+        infoWin.open({ map, anchor: m });
+      });
+      markers.push(m);
+    }
+  }
+
+  function fitMap() {
+    if (!map || !stations.length) return;
+    const b = new google.maps.LatLngBounds();
+    stations.forEach(s => b.extend({ lat: s.lat, lng: s.lng }));
+    if (myPos) b.extend(myPos);
+    map.fitBounds(b, 40);
+  }
+
+  // ---------- UI wiring ----------
+  function showTab(which) {
+    const isMap = which === "map";
+    $("tabMap").classList.toggle("on", isMap);
+    $("tabList").classList.toggle("on", !isMap);
+    $("mapWrap").classList.toggle("hidden", !isMap);
+    $("list").classList.toggle("hidden", isMap);
+  }
+  $("tabList").onclick = () => showTab("list");
+  $("tabMap").onclick = () => showTab("map");
+  $("fuel").onchange = e => { S.fuel = e.target.value; store.set(S); render(); };
+  $("sort").onchange = e => { S.sort = e.target.value; store.set(S); render(); };
+  $("locate").onclick = () => { if (map) locateAndSearch(); };
+  $("searchHere").onclick = () => { const c = map.getCenter(); search({ lat: c.lat(), lng: c.lng() }); };
+
+  const dlg = $("settings");
+  function openSettings() {
+    $("apiKey").value = S.apiKey;
+    $("blocklist").value = S.blocklist.join("\n");
+    $("radius").value = S.radiusMi;
+    $("hideNoPrice").checked = !!S.hideNoPrice;
+    if (dlg.showModal) dlg.showModal(); else dlg.setAttribute("open", "");
+  }
+  $("openSettings").onclick = openSettings;
+  $("cancelSettings").onclick = () => dlg.close();
+  $("saveSettings").onclick = () => {
+    const newKey = $("apiKey").value.trim();
+    const keyChanged = newKey !== S.apiKey;
+    S.apiKey = newKey;
+    S.blocklist = $("blocklist").value.split("\n").map(x => x.trim()).filter(Boolean);
+    S.radiusMi = Math.min(31, Math.max(1, Number($("radius").value) || 10));
+    S.hideNoPrice = $("hideNoPrice").checked;
+    store.set(S);
+    dlg.close();
+    if (keyChanged) { location.reload(); return; }
+    if (searchCenter) search(searchCenter);
+  };
+
+  init();
+})();
+</script>
+</body>
+</html>
