@@ -66,6 +66,28 @@
   dialog input[type=password],dialog textarea{width:100%}
   dialog textarea{min-height:130px}
   .row{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+  #drive{position:absolute;inset:0;overflow:auto;padding:10px 10px 40px}
+  .dform{display:flex;gap:8px;margin-bottom:8px}
+  .dform input{flex:1;min-width:0;font-size:17px;padding:10px 12px}
+  .dform button,.drow button{font-size:17px;padding:10px 14px}
+  .drow{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:6px}
+  .drow label{display:flex;gap:8px;align-items:center;font-size:15px}
+  .drow input{width:90px;font-size:17px;padding:8px 10px;background:var(--bg);border:1px solid var(--line);border-radius:8px}
+  .dst{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:10px 0;
+    display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:start}
+  .dst .name{font-weight:700;font-size:18px}
+  .dst .sub{color:var(--muted);font-size:14px}
+  .dst .price{grid-row:1 / span 3;grid-column:2;text-align:right;font-size:30px;font-weight:800;white-space:nowrap}
+  .dst .price small{display:block;font-size:13px;font-weight:400;color:var(--muted)}
+  .dst .info{font-size:16px}
+  .dst .go{grid-column:1 / -1;display:block;text-align:center;margin-top:8px;padding:14px;border-radius:10px;
+    background:var(--accent);color:var(--accent-ink);font-weight:700;font-size:18px;text-decoration:none}
+  .dst.best{border-color:var(--good)} .dst.best .price{color:var(--good)}
+  .stale{color:var(--warn)}
+  .warnbox{border:1px solid var(--warn);color:var(--warn);border-radius:10px;padding:10px 12px;margin:8px 0;font-size:15px}
+  dialog h3{margin:18px 0 0;font-size:15px}
+  dialog .grid2{display:grid;grid-template-columns:1fr 90px;gap:6px 10px;align-items:center;margin-top:8px;font-size:14px}
+  dialog .grid2 input{width:90px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
   .iw{color:#1b1f24;font-size:14px;max-width:240px}
   .iw b{display:block;margin-bottom:2px}
   .iw a{color:#0b6bcb;font-weight:600}
@@ -82,8 +104,8 @@
     <option value="E85">E85</option>
   </select>
   <select id="sort" aria-label="Sort">
-    <option value="drive">Closest drive</option>
     <option value="price">Cheapest</option>
+    <option value="drive">Closest drive</option>
   </select>
   <button id="locate" title="Refresh stations near me">📍</button>
   <button id="openSettings" title="Settings">⚙️</button>
@@ -91,6 +113,7 @@
 <div class="tabs">
   <button id="tabList" class="on">List</button>
   <button id="tabMap">Map</button>
+  <button id="tabDrive">Driving</button>
 </div>
 <main>
   <div id="list">
@@ -105,6 +128,18 @@
     <div id="map"></div>
     <button id="searchHere" class="primary">Search this area</button>
     <div id="mapStatus" class="hidden"></div>
+  </div>
+  <div id="drive" class="hidden">
+    <form class="dform" id="destForm">
+      <input id="destInput" type="text" placeholder="Destination (city or address)" autocomplete="off">
+      <button class="primary" type="submit">Go</button>
+    </form>
+    <div class="drow">
+      <label>Miles left in tank <input id="rangeInput" type="number" inputmode="numeric" min="0" placeholder="opt."></label>
+      <button id="driveRefresh" type="button">↻ Refresh</button>
+    </div>
+    <div class="status" id="driveStatus">Enter where you're headed. Stations are searched 5–20 miles ahead on your route.</div>
+    <div id="driveItems"></div>
   </div>
 </main>
 
@@ -122,6 +157,20 @@
     <input id="hideNoPrice" type="checkbox"> Hide stations with no price for this fuel
   </label>
 
+  <h3>Driving tab</h3>
+  <div class="grid2">
+    <span>Search starts this many miles ahead</span><input id="dStart" type="number" min="0" max="100">
+    <span>…and ends this many miles ahead</span><input id="dEnd" type="number" min="1" max="150">
+    <span>Max distance from the road (miles)</span><input id="dCorridor" type="number" min="0.5" max="10" step="0.5">
+    <span>Max detour (minutes, off and back on)</span><input id="dDetour" type="number" min="1" max="60">
+    <span>Your MPG</span><input id="dMpg" type="number" min="5" max="150">
+    <span>Gallons you usually buy</span><input id="dGal" type="number" min="1" max="200">
+    <span>Auto-refresh every N miles (0 = off)</span><input id="dAuto" type="number" min="0" max="200">
+  </div>
+  <label style="display:flex;gap:8px;align-items:center;font-weight:400">
+    <input id="dTrue" type="checkbox"> Rank by true cost (adds the fuel the detour burns)
+  </label>
+
   <div class="row">
     <button id="cancelSettings">Cancel</button>
     <button id="saveSettings" class="primary">Save</button>
@@ -135,7 +184,7 @@
     apiKey: "",
     blocklist: ["Costco", "Sam's Club", "MCX", "Marine Corps Exchange", "Marine Mart"],
     fuel: "REGULAR_UNLEADED",
-    sort: "drive",
+    sort: "price",
     hideNoPrice: false
   };
   const load = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
@@ -166,7 +215,7 @@
   const CACHE_MAX_MOVE_M = 500;         // …if you've moved less than 500 m
 
   // ---------- state ----------
-  let map, PlaceCls, RankPref, RouteMatrix, AdvMarker;
+  let map, PlaceCls, RankPref, RouteMatrix, RouteCls, AdvMarker;
   let myPos = null;
   let nearList = [];        // GPS search (List tab)
   let nearNote = "";
@@ -257,7 +306,7 @@
 
     const { Map } = await google.maps.importLibrary("maps");
     ({ Place: PlaceCls, SearchNearbyRankPreference: RankPref } = await google.maps.importLibrary("places"));
-    ({ RouteMatrix } = await google.maps.importLibrary("routes"));
+    ({ RouteMatrix, Route: RouteCls } = await google.maps.importLibrary("routes"));
     ({ AdvancedMarkerElement: AdvMarker } = await google.maps.importLibrary("marker"));
 
     map = new Map($("map"), {
@@ -501,17 +550,340 @@
   }
   function renderAll() { renderList(); drawMarkers(); }
 
+  // =====================================================================
+  // ---------- Driving tab: cheapest stations a short detour ahead ----------
+  // =====================================================================
+  const D = Object.assign({
+    dest: "", startMi: 5, endMi: 20, corridorMi: 2, detourMin: 12,
+    mpg: 25, gallons: 12, autoMi: 15, trueCost: true, rangeMi: ""
+  }, load("gasFinderDrive", {}));
+  const saveD = () => save("gasFinderDrive", D);
+  const MI = 1609.344;
+
+  let route = load("gasFinderRoute", null);           // { dest, pts: [[lat,lng,cumMeters,cumSecs],...] }
+  let driveResult = load("gasFinderDriveResult", null); // { at, dest, items, notes, windowMi }
+  let driveWatch = null, driveBusy = false, lastRunAlong = null;
+
+  const dStatus = (msg, err=false) => { const el = $("driveStatus"); el.textContent = msg || ""; el.classList.toggle("err", err); };
+  const llOf = p => ({ lat: typeof p.lat === "function" ? p.lat() : p.lat, lng: typeof p.lng === "function" ? p.lng() : p.lng });
+
+  $("destInput").value = D.dest;
+  $("rangeInput").value = D.rangeMi;
+
+  // ---- route geometry ----
+  async function buildRoute(origin) {
+    const { routes } = await RouteCls.computeRoutes({
+      origin, destination: D.dest, travelMode: "DRIVING",
+      fields: ["path", "legs", "distanceMeters", "durationMillis"]
+    });
+    const r = routes && routes[0];
+    if (!r) throw new Error("Google found no driving route to that destination.");
+    const avgSpeed = (r.distanceMeters && r.durationMillis) ? r.distanceMeters / (r.durationMillis / 1000) : 25;
+
+    // Walk every step so we know the time to reach each point (needed for detour math)
+    const pts = []; let cumM = 0, cumS = 0, last = null;
+    const add = (p, force) => {
+      if (!last || force || meters(last, p) >= 250) { pts.push([+p.lat.toFixed(6), +p.lng.toFixed(6), Math.round(cumM), Math.round(cumS)]); last = p; }
+    };
+    const steps = [];
+    for (const leg of (r.legs || [])) for (const st of (leg.steps || [])) steps.push(st);
+    if (steps.length) {
+      for (const st of steps) {
+        const path = (st.path || []).map(llOf); if (path.length < 2) continue;
+        let geo = 0; for (let i = 1; i < path.length; i++) geo += meters(path[i-1], path[i]);
+        const stM = st.distanceMeters || geo;
+        const stS = ((st.staticDurationMillis ?? st.durationMillis) != null) ? (st.staticDurationMillis ?? st.durationMillis) / 1000 : stM / avgSpeed;
+        if (!pts.length) add(path[0], true);
+        for (let i = 1; i < path.length; i++) {
+          const g = meters(path[i-1], path[i]), f = geo ? g / geo : 0;
+          cumM += stM * f; cumS += stS * f; add(path[i]);
+        }
+      }
+    } else {
+      const path = (r.path || []).map(llOf);
+      path.forEach((p, i) => { if (i) { const g = meters(path[i-1], p); cumM += g; cumS += g / avgSpeed; } add(p, i === 0); });
+    }
+    if (last && pts.length) { const e = pts[pts.length-1]; if (e[2] !== Math.round(cumM)) pts.push([last.lat, last.lng, Math.round(cumM), Math.round(cumS)]); }
+    if (pts.length < 2) throw new Error("The route came back empty.");
+    route = { dest: D.dest, pts };
+    save("gasFinderRoute", route);
+  }
+
+  // Equirectangular projection around a point: fine for distances of a few miles
+  function proj(p, ref) {
+    const k = Math.cos(ref.lat * Math.PI / 180);
+    return { x: (p.lng - ref.lng) * 111320 * k, y: (p.lat - ref.lat) * 110540 };
+  }
+  // Nearest point on a polyline: { dist (m), along (route meters), t (route secs) }
+  function nearestOn(pts, p, from = 0, to = pts.length - 1) {
+    let best = { dist: Infinity, along: 0, t: 0 };
+    for (let i = Math.max(1, from); i <= to; i++) {
+      const a = { lat: pts[i-1][0], lng: pts[i-1][1] }, b = { lat: pts[i][0], lng: pts[i][1] };
+      const A = proj(a, p), B = proj(b, p);
+      const dx = B.x - A.x, dy = B.y - A.y, L = dx*dx + dy*dy;
+      let u = L ? -(A.x*dx + A.y*dy) / L : 0; u = Math.max(0, Math.min(1, u));
+      const d = Math.hypot(A.x + u*dx, A.y + u*dy);
+      if (d < best.dist) best = { dist: d, along: pts[i-1][2] + u*(pts[i][2]-pts[i-1][2]), t: pts[i-1][3] + u*(pts[i][3]-pts[i-1][3]), idx: i };
+    }
+    return best;
+  }
+  function idxAtAlong(m) {
+    const pts = route.pts; let lo = 0, hi = pts.length - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (pts[mid][2] < m) lo = mid + 1; else hi = mid; }
+    return lo;
+  }
+  function pointAt(m) {
+    const pts = route.pts, i = Math.max(1, idxAtAlong(m)), a = pts[i-1], b = pts[i];
+    const f = b[2] > a[2] ? Math.min(1, Math.max(0, (m - a[2]) / (b[2] - a[2]))) : 0;
+    return [a[0] + f*(b[0]-a[0]), a[1] + f*(b[1]-a[1]), m, a[3] + f*(b[3]-a[3])];
+  }
+  function sliceRoute(aM, bM) {
+    const out = [pointAt(aM)];
+    for (let i = idxAtAlong(aM); i < route.pts.length && route.pts[i][2] < bM; i++) if (route.pts[i][2] > aM) out.push(route.pts[i]);
+    out.push(pointAt(bM));
+    return out;
+  }
+  function encodePolyline(pts) {
+    let out = "", pLat = 0, pLng = 0;
+    const enc = v => { v = v < 0 ? ~(v << 1) : (v << 1); let s = ""; while (v >= 0x20) { s += String.fromCharCode((0x20 | (v & 0x1f)) + 63); v >>= 5; } return s + String.fromCharCode(v + 63); };
+    for (const p of pts) {
+      const lat = Math.round(p[0] * 1e5), lng = Math.round(p[1] * 1e5);
+      out += enc(lat - pLat) + enc(lng - pLng); pLat = lat; pLng = lng;
+    }
+    return out;
+  }
+
+  // ---- search along a slice of the route (Places Text Search, one billed call) ----
+  async function searchSlice(slice) {
+    const body = {
+      textQuery: "gas station", includedType: "gas_station", strictTypeFiltering: true, pageSize: 20,
+      searchAlongRouteParameters: { polyline: { encodedPolyline: encodePolyline(slice) } },
+      routingParameters: { origin: { latitude: slice[0][0], longitude: slice[0][1] }, travelMode: "DRIVE" }
+    };
+    const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json", "X-Goog-Api-Key": S.apiKey,
+        "X-Goog-FieldMask": "places.id,places.displayName,places.location,places.shortFormattedAddress,places.formattedAddress,places.fuelOptions,places.currentOpeningHours,routingSummaries"
+      },
+      body: JSON.stringify(body)
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((j.error && ((j.error.status || "") + ": " + (j.error.message || ""))) || ("HTTP " + res.status));
+    const baseS = slice[slice.length-1][3] - slice[0][3];
+    const baseM = slice[slice.length-1][2] - slice[0][2];
+    const secs = s => s == null ? null : parseFloat(String(s));
+    return (j.places || []).map((p, i) => {
+      const legs = j.routingSummaries?.[i]?.legs || [];
+      let detourS = null, detourM = null;
+      if (legs.length >= 2 && legs[0].duration != null && legs[1].duration != null) {
+        detourS = Math.max(0, secs(legs[0].duration) + secs(legs[1].duration) - baseS);
+        detourM = Math.max(0, (legs[0].distanceMeters || 0) + (legs[1].distanceMeters || 0) - baseM);
+      }
+      return { p, detourS, detourM };
+    });
+  }
+
+  async function searchWindow(aM, bM, notes) {
+    let calls = 1;
+    let found = await searchSlice(sliceRoute(aM, bM));
+    if (found.length >= 20) {
+      // Busy stretch: Google only returns 20 per search, so search thirds of it too
+      const third = (bM - aM) / 3;
+      for (let k = 0; k < 3; k++) {
+        try { found = found.concat(await searchSlice(sliceRoute(aM + k*third, aM + (k+1)*third))); calls++; }
+        catch (e) { notes.push(friendlyError(e, "Extra search")); break; }
+      }
+    }
+    // Merge duplicates, keep the smallest detour
+    const byId = new Map();
+    for (const f of found) {
+      const prev = byId.get(f.p.id);
+      if (!prev || (f.detourS != null && (prev.detourS == null || f.detourS < prev.detourS))) byId.set(f.p.id, f);
+    }
+    return { list: [...byId.values()], calls };
+  }
+
+  function processStations(found, aM, bM, myAlong, notes) {
+    const fuel = S.fuel, out = [];
+    const from = Math.max(1, idxAtAlong(aM) - 1), to = Math.min(route.pts.length - 1, idxAtAlong(bM) + 1);
+    let blocked = 0, closed = 0, far = 0, longDetour = 0, outOfRange = 0, noDetour = 0;
+    const range = Number(D.rangeMi) > 0 ? Number(D.rangeMi) * MI : null;
+    for (const { p, detourS, detourM } of found) {
+      const name = p.displayName?.text || p.displayName || "Gas station";
+      if (isBlocked(name)) { blocked++; continue; }
+      const loc = { lat: p.location.latitude, lng: p.location.longitude };
+      const near = nearestOn(route.pts, loc, from, to);
+      if (near.dist > D.corridorMi * MI) { far++; continue; }
+      if (p.currentOpeningHours && p.currentOpeningHours.openNow === false) { closed++; continue; }
+      if (detourS == null) { if (near.dist > 0.5 * MI) { noDetour++; continue; } }
+      else if (detourS / 60 >= D.detourMin) { longDetour++; continue; }
+      const aheadM = Math.max(0, near.along - myAlong);
+      if (range != null && aheadM + near.dist > range) { outOfRange++; continue; }
+      const prices = {};
+      for (const fp of (p.fuelOptions?.fuelPrices || [])) {
+        const v = moneyToNum(fp.price);
+        if (v != null) prices[String(fp.type)] = { price: v, updated: fp.updateTime || null };
+      }
+      out.push({
+        id: p.id, name, addr: shortAddr(p), lat: loc.lat, lng: loc.lng, prices,
+        open: p.currentOpeningHours ? p.currentOpeningHours.openNow : null,
+        detourS, detourM: detourM ?? near.dist * 2, aheadM, offRoadM: near.dist
+      });
+    }
+    const parts = [];
+    if (blocked) parts.push(`${blocked} blocked`);
+    if (closed) parts.push(`${closed} closed now`);
+    if (longDetour) parts.push(`${longDetour} over ${D.detourMin}-min detour`);
+    if (far) parts.push(`${far} over ${D.corridorMi} mi from road`);
+    if (outOfRange) parts.push(`${outOfRange} beyond your fuel range`);
+    if (noDetour) parts.push(`${noDetour} with unknown detour`);
+    if (parts.length) notes.push("Filtered out: " + parts.join(", "));
+    return out;
+  }
+
+  const effPrice = (s, fp) => fp.price + ((s.detourM || 0) / MI / D.mpg) * fp.price / D.gallons;
+
+  async function runDrive(force) {
+    if (driveBusy || !map) return;
+    if (!D.dest) { dStatus("Enter a destination first."); return; }
+    driveBusy = true;
+    try {
+      dStatus("Getting your location…");
+      let pos;
+      try { pos = await getPosition(); }
+      catch (e) { dStatus(`Couldn't get your location (error ${e?.code ?? "?"}). Allow location access and try again.`, true); return; }
+      myPos = pos; showMe();
+
+      if (!route || route.dest !== D.dest) {
+        dStatus("Planning the route…");
+        await buildRoute(pos);
+      }
+      let here = nearestOn(route.pts, pos);
+      if (here.dist > 3 * MI) {                // left the planned route: re-plan from here
+        dStatus("You're off the planned route. Re-planning…");
+        await buildRoute(pos);
+        here = nearestOn(route.pts, pos);
+      }
+      const total = route.pts[route.pts.length-1][2];
+      const notes = [];
+      const windows = [[D.startMi, D.endMi], [D.endMi, Math.max(D.endMi * 3, 60)]];
+      let items = [], usedWin = null, calls = 0;
+      for (const [w0, w1] of windows) {
+        const aM = here.along + w0 * MI, bM = Math.min(here.along + w1 * MI, total);
+        if (bM - aM < 0.5 * MI) break;
+        dStatus(`Searching ${w0}–${Math.round((bM - here.along) / MI)} mi ahead…`);
+        const { list, calls: c } = await searchWindow(aM, bM, notes); calls += c;
+        items = processStations(list, aM, bM, here.along, notes);
+        usedWin = [w0, Math.round((bM - here.along) / MI)];
+        if (items.length) break;
+        notes.length = 0;
+      }
+      lastRunAlong = here.along;
+      const remainingMi = (total - here.along) / MI;
+      if (!items.length) {
+        const w = usedWin ? `${usedWin[0]}–${usedWin[1]} mi` : "the rest of the route";
+        notes.unshift(remainingMi < D.startMi ? "You're almost at your destination." :
+          `No stations within a ${D.detourMin}-min detour in the next ${w}. Consider fueling now (see the List tab).`);
+      } else if (usedWin && usedWin[0] !== D.startMi) {
+        notes.unshift(`Nothing usable ${D.startMi}–${D.endMi} mi ahead, so this is ${usedWin[0]}–${usedWin[1]} mi ahead.`);
+      }
+      const range = Number(D.rangeMi) > 0 ? Number(D.rangeMi) : null;
+      if (range != null && range < D.startMi) notes.unshift(`Low fuel: only ${range} mi left. Use the List tab for the nearest station.`);
+      driveResult = { at: Date.now(), dest: D.dest, items, notes, win: usedWin, calls };
+      save("gasFinderDriveResult", driveResult);
+      renderDrive();
+    } catch (e) {
+      const msg = friendlyError(e, "Driving search");
+      if (driveResult && driveResult.dest === D.dest) { renderDrive(); dStatus(msg + " Showing the last result.", true); }
+      else dStatus(msg, true);
+    } finally { driveBusy = false; }
+  }
+
+  function renderDrive() {
+    const box = $("driveItems");
+    if (!box) return;
+    if (!driveResult || driveResult.dest !== D.dest) { box.innerHTML = ""; return; }
+    const fuel = S.fuel;
+    const priced = driveResult.items.filter(s => s.prices[fuel]);
+    const unpriced = driveResult.items.filter(s => !s.prices[fuel]);
+    const key = s => D.trueCost ? effPrice(s, s.prices[fuel]) : s.prices[fuel].price;
+    priced.sort((a, b) => key(a) - key(b));
+    const list = priced.concat(S.hideNoPrice ? [] : unpriced).slice(0, 20);
+    const best = priced.length ? key(priced[0]) : null;
+    const age = Math.round((Date.now() - driveResult.at) / 60000);
+    const win = driveResult.win ? `${driveResult.win[0]}–${driveResult.win[1]} mi ahead` : "";
+    dStatus(`${list.length} stations ${win} · ${D.trueCost ? "ranked by true cost" : "ranked by pump price"} · updated ${age < 1 ? "just now" : age + " min ago"}`);
+    const warn = (driveResult.notes || []).map(n => `<div class="${/^Filtered/.test(n) ? "status" : "warnbox"}">${esc(n)}</div>`).join("");
+    box.innerHTML = warn + list.map(s => {
+      const fp = s.prices[fuel];
+      const isBest = fp && key(s) === best;
+      const t = fp?.updated ? new Date(fp.updated).getTime() : NaN;
+      const stale = Number.isFinite(t) && Date.now() - t > 24 * 3600e3;
+      const priceHtml = fp
+        ? `<div class="price">$${fp.price.toFixed(2)}<small>${D.trueCost ? "≈ $" + effPrice(s, fp).toFixed(2) + " w/ detour" : ""}</small><small class="${stale ? "stale" : ""}">${stale ? "⚠ " : ""}${esc(ago(fp.updated))}</small></div>`
+        : `<div class="price" style="font-size:16px;font-weight:400;color:var(--muted)">No price</div>`;
+      const detour = s.detourS != null ? `+${Math.max(1, Math.round(s.detourS / 60))} min detour` : "detour unknown";
+      const open = s.open === true ? "Open now" : s.open === false ? "Closed" : "Hours unknown";
+      const nav = "https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=" + encodeURIComponent(D.dest) +
+                  "&waypoints=" + s.lat + "," + s.lng;
+      return `<div class="dst${isBest ? " best" : ""}">
+        <div class="name">${esc(s.name)}</div>${priceHtml}
+        <div class="info">${detour} · ${Math.round(s.aheadM / MI)} mi ahead</div>
+        <div class="sub">${esc(open)} · ${esc(s.addr)}</div>
+        <a class="go" href="${nav}" target="_blank" rel="noopener">Navigate via this station ›</a>
+      </div>`;
+    }).join("");
+  }
+
+  function startDriving() {
+    renderDrive();
+    if (!D.dest) { dStatus("Enter where you're headed. Stations are searched " + D.startMi + "–" + D.endMi + " miles ahead on your route."); return; }
+    if (!map) return;
+    const fresh = driveResult && driveResult.dest === D.dest && Date.now() - driveResult.at < 10 * 60000;
+    if (!fresh) runDrive(false);
+    if (navigator.geolocation && driveWatch == null && D.autoMi > 0) {
+      driveWatch = navigator.geolocation.watchPosition(p => {
+        if (!route || route.dest !== D.dest || driveBusy) return;
+        const pos = { lat: p.coords.latitude, lng: p.coords.longitude };
+        const here = nearestOn(route.pts, pos);
+        if (lastRunAlong == null) { lastRunAlong = here.along; return; }
+        if (here.along - lastRunAlong >= D.autoMi * MI || here.dist > 3 * MI) runDrive(false);
+      }, () => {}, { enableHighAccuracy: true, maximumAge: 30000, timeout: 60000 });
+    }
+  }
+  function stopDriving() {
+    if (driveWatch != null) { try { navigator.geolocation.clearWatch(driveWatch); } catch {} driveWatch = null; }
+  }
+
+  $("destForm").addEventListener("submit", e => {
+    e.preventDefault();
+    const v = $("destInput").value.trim();
+    if (!v) return;
+    if (v !== D.dest) { D.dest = v; route = null; driveResult = null; lastRunAlong = null; saveD(); save("gasFinderRoute", null); }
+    $("destInput").blur();
+    runDrive(true);
+    stopDriving(); startDriving();
+  });
+  $("rangeInput").addEventListener("change", e => { D.rangeMi = e.target.value; saveD(); });
+  $("driveRefresh").onclick = () => runDrive(true);
+
   // ---------- UI wiring ----------
+  let currentTab = "list";
   function showTab(which) {
-    const isMap = which === "map";
-    $("tabMap").classList.toggle("on", isMap);
-    $("tabList").classList.toggle("on", !isMap);
-    $("mapWrap").classList.toggle("hidden", !isMap);
-    $("list").classList.toggle("hidden", isMap);
+    currentTab = which;
+    $("tabList").classList.toggle("on", which === "list");
+    $("tabMap").classList.toggle("on", which === "map");
+    $("tabDrive").classList.toggle("on", which === "drive");
+    $("list").classList.toggle("hidden", which !== "list");
+    $("mapWrap").classList.toggle("hidden", which !== "map");
+    $("drive").classList.toggle("hidden", which !== "drive");
+    if (which === "drive") startDriving(); else stopDriving();
   }
   $("tabList").onclick = () => showTab("list");
   $("tabMap").onclick = () => showTab("map");
-  $("fuel").onchange = e => { S.fuel = e.target.value; saveS(); renderAll(); };
+  $("tabDrive").onclick = () => showTab("drive");
+  $("fuel").onchange = e => { S.fuel = e.target.value; saveS(); renderAll(); renderDrive(); };
   $("sort").onchange = e => { S.sort = e.target.value; saveS(); renderAll(); };
   $("locate").onclick = () => {
     if (!map) return;
@@ -526,6 +898,9 @@
     $("apiKey").value = S.apiKey;
     $("blocklist").value = S.blocklist.join("\n");
     $("hideNoPrice").checked = !!S.hideNoPrice;
+    $("dStart").value = D.startMi; $("dEnd").value = D.endMi; $("dCorridor").value = D.corridorMi;
+    $("dDetour").value = D.detourMin; $("dMpg").value = D.mpg; $("dGal").value = D.gallons;
+    $("dAuto").value = D.autoMi; $("dTrue").checked = !!D.trueCost;
     if (dlg.showModal) dlg.showModal(); else dlg.setAttribute("open", "");
   }
   $("openSettings").onclick = openSettings;
@@ -537,6 +912,16 @@
     const blockChanged = newBlock.join("\n") !== S.blocklist.join("\n");
     S.apiKey = newKey; S.blocklist = newBlock; S.hideNoPrice = $("hideNoPrice").checked;
     saveS();
+    const num = (id, d, lo, hi) => { const v = Number($(id).value); return Number.isFinite(v) && $(id).value !== "" ? Math.min(hi, Math.max(lo, v)) : d; };
+    D.startMi = num("dStart", 5, 0, 100);
+    D.endMi = Math.max(D.startMi + 1, num("dEnd", 20, 1, 150));
+    D.corridorMi = num("dCorridor", 2, 0.5, 10);
+    D.detourMin = num("dDetour", 12, 1, 60);
+    D.mpg = num("dMpg", 25, 5, 150);
+    D.gallons = num("dGal", 12, 1, 200);
+    D.autoMi = num("dAuto", 15, 0, 200);
+    D.trueCost = $("dTrue").checked;
+    saveD(); renderDrive();
     dlg.close();
     if (keyChanged) { location.reload(); return; }
     if (blockChanged) {
