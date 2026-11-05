@@ -93,7 +93,14 @@
   <button id="tabMap">Map</button>
 </div>
 <main>
-  <div id="list"><div class="status" id="status">Starting…</div><div id="items"></div></div>
+  <div id="list">
+    <div class="status" id="status">Starting…</div>
+    <div id="geoBox" class="hidden">
+      <button id="geoBtn" class="primary">📍 Use my location</button>
+      <div class="status" id="geoHelp"></div>
+    </div>
+    <div id="items"></div>
+  </div>
   <div id="mapWrap" class="hidden">
     <div id="map"></div>
     <button id="searchHere" class="primary">Search this area</button>
@@ -166,6 +173,7 @@
   let areaList = null;      // last "Search this area" (Map tab); null = show nearList
   let markers = [], meMarker = null, infoWin = null;
   let mapFittedToNear = false;
+  let sessionAsked = false;
 
   // ---------- helpers ----------
   const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -273,13 +281,41 @@
     });
   }
 
-  async function refreshNear(force) {
-    setStatus("Finding your location…");
+  async function permState() {
+    try { return (await navigator.permissions.query({ name: "geolocation" })).state; }
+    catch { return "unknown"; }
+  }
+  function showGeoHelp(msg) {
+    $("geoHelp").textContent = msg || "";
+    $("geoBox").classList.toggle("hidden", !msg);
+  }
+  const BLOCKED_HELP = "Location is blocked for this site. Click the icon at the left of the address bar " +
+    "(🔒 or the settings slider) → Site settings → Location → Allow, then reload the page.";
+  const OS_HELP = "Your browser allows it, but the computer didn't give a location. Turn on location services: " +
+    "Windows: Settings → Privacy & security → Location (turn on, and allow desktop apps). " +
+    "Mac: System Settings → Privacy & Security → Location Services → turn on for your browser. Then press the button again.";
+
+  async function refreshNear(force, fromClick=false) {
+    showGeoHelp("");
+    if (!navigator.geolocation) { setStatus("This browser doesn't support location.", true); return; }
+    const state = await permState();
+    if (state === "denied") { setStatus("Location access is needed to find stations near you.", true); showGeoHelp(BLOCKED_HELP); return; }
+    if (state === "prompt" && !fromClick) {
+      // Some desktop browsers hide prompts that aren't triggered by a click; offer the button right away.
+      showGeoHelp("If your browser didn't ask, press the button and choose Allow.");
+    }
+    setStatus(state === "prompt" ? "Waiting for you to allow location access…" : "Finding your location…");
     try { myPos = await getPosition(); }
-    catch {
-      setStatus("Couldn't get your GPS location. Allow location access for this page, then tap 📍.", true);
+    catch (e) {
+      setStatus("Couldn't get your location.", true);
+      if (e && e.code === 1) showGeoHelp((await permState()) === "denied" ? BLOCKED_HELP
+        : "The location request was dismissed or blocked. Press the button and choose Allow.");
+      else if (e && e.code === 2) showGeoHelp(OS_HELP);
+      else if (e && e.code === 3) showGeoHelp("Getting your location timed out. Press the button to try again.");
+      else showGeoHelp("Press the button to try again.");
       return;
     }
+    showGeoHelp("");
     showMe();
 
     // Reuse a recent search from about the same spot (saves quota)
@@ -474,6 +510,7 @@
     refreshNear(true);
   };
   $("searchHere").onclick = () => searchArea();
+  $("geoBtn").onclick = () => { if (map) { areaList = null; refreshNear(false, true); } };
 
   const dlg = $("settings");
   function openSettings() {
