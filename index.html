@@ -21,7 +21,7 @@
     border-bottom:1px solid var(--line);flex-wrap:wrap}
   header h1{font-size:17px;margin:0 auto 0 0}
   select,button,input,textarea{font:inherit;color:inherit}
-  select,input[type=text],input[type=password],input[type=number],textarea{
+  select,input[type=text],input[type=password],textarea{
     background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
   button{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer}
   button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
@@ -35,6 +35,10 @@
   #map{position:absolute;inset:0}
   #searchHere{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:5;display:none;
     box-shadow:0 2px 8px rgba(0,0,0,.25)}
+  #mapStatus{position:absolute;left:10px;right:10px;bottom:16px;z-index:5;background:var(--card);
+    border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:14px;
+    box-shadow:0 2px 8px rgba(0,0,0,.25)}
+  #mapStatus.err{color:var(--warn);border-color:var(--warn)}
   .hidden{display:none!important}
   .status{color:var(--muted);padding:10px 4px;font-size:14px}
   .status.err{color:var(--warn)}
@@ -46,7 +50,6 @@
   .st .price small{display:block;font-size:12px;font-weight:400;color:var(--muted)}
   .st .price.none{font-size:14px;font-weight:400;color:var(--muted)}
   .st .meta{grid-column:1 / -1;display:flex;justify-content:space-between;align-items:center;margin-top:4px;font-size:14px}
-  .st .drive{color:var(--ink)}
   .st a.nav{color:var(--accent);text-decoration:none;font-weight:600}
   .st.best{border-color:var(--good)}
   .st.best .price{color:var(--good)}
@@ -60,7 +63,7 @@
   dialog::backdrop{background:rgba(0,0,0,.45)}
   dialog label{display:block;margin:12px 0 4px;font-weight:600;font-size:14px}
   dialog .hint{color:var(--muted);font-size:13px;margin-top:3px}
-  dialog input,dialog textarea{width:100%}
+  dialog input[type=password],dialog textarea{width:100%}
   dialog textarea{min-height:130px}
   .row{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
   .iw{color:#1b1f24;font-size:14px;max-width:240px}
@@ -79,10 +82,10 @@
     <option value="E85">E85</option>
   </select>
   <select id="sort" aria-label="Sort">
-    <option value="price">Cheapest</option>
     <option value="drive">Closest drive</option>
+    <option value="price">Cheapest</option>
   </select>
-  <button id="locate" title="Search around my location">📍</button>
+  <button id="locate" title="Refresh stations near me">📍</button>
   <button id="openSettings" title="Settings">⚙️</button>
 </header>
 <div class="tabs">
@@ -94,6 +97,7 @@
   <div id="mapWrap" class="hidden">
     <div id="map"></div>
     <button id="searchHere" class="primary">Search this area</button>
+    <div id="mapStatus" class="hidden"></div>
   </div>
 </main>
 
@@ -105,14 +109,10 @@
 
   <label for="blocklist">Never show stations matching (one per line)</label>
   <textarea id="blocklist"></textarea>
-  <div class="hint">Matches whole words in the station name, case-insensitive. Everything else always shows, wherever you search.</div>
-
-  <label for="radius">Search radius (miles)</label>
-  <input id="radius" type="number" min="1" max="31" step="1">
-  <div class="hint">Up to 31 miles. Google returns at most 20 stations per search, nearest first.</div>
+  <div class="hint">Matches whole words in the station name, case-insensitive.</div>
 
   <label style="display:flex;gap:8px;align-items:center;font-weight:400">
-    <input id="hideNoPrice" type="checkbox" style="width:auto"> Hide stations with no price for this fuel
+    <input id="hideNoPrice" type="checkbox"> Hide stations with no price for this fuel
   </label>
 
   <div class="row">
@@ -127,34 +127,45 @@
   const DEFAULTS = {
     apiKey: "",
     blocklist: ["Costco", "Sam's Club", "MCX", "Marine Corps Exchange", "Marine Mart"],
-    radiusMi: 10,
     fuel: "REGULAR_UNLEADED",
-    sort: "price",
-    hideNoPrice: false,
-    lastCenter: null
+    sort: "drive",
+    hideNoPrice: false
   };
-  const store = {
-    get() {
-      try { return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem("gasFinder") || "{}")); }
-      catch { return Object.assign({}, DEFAULTS); }
-    },
-    set(s) { try { localStorage.setItem("gasFinder", JSON.stringify(s)); } catch {} }
-  };
-  let S = store.get();
+  const load = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
+  const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+  let S = Object.assign({}, DEFAULTS, load("gasFinder", {}));
+  const saveS = () => save("gasFinder", S);
 
   const $ = id => document.getElementById(id);
-  const statusEl = $("status"), itemsEl = $("items");
-  const setStatus = (msg, err=false) => { statusEl.textContent = msg; statusEl.classList.toggle("err", err); statusEl.classList.toggle("hidden", !msg); };
+  const statusEl = $("status"), itemsEl = $("items"), mapStatusEl = $("mapStatus");
+  function setStatus(msg, err=false) {
+    statusEl.textContent = msg || ""; statusEl.classList.toggle("err", err); statusEl.classList.toggle("hidden", !msg);
+  }
+  let mapStatusTimer;
+  function setMapStatus(msg, err=false, sticky=false) {
+    clearTimeout(mapStatusTimer);
+    mapStatusEl.textContent = msg || "";
+    mapStatusEl.classList.toggle("err", err);
+    mapStatusEl.classList.toggle("hidden", !msg);
+    if (msg && !sticky && !err) mapStatusTimer = setTimeout(() => mapStatusEl.classList.add("hidden"), 5000);
+  }
 
   $("fuel").value = S.fuel;
   $("sort").value = S.sort;
 
+  // ---------- constants ----------
+  const NEAR_RADIUS_M = 50000;          // max Google allows; results are ranked nearest-first anyway
+  const CACHE_MAX_AGE_MS = 10 * 60000;  // reuse a GPS search for 10 min…
+  const CACHE_MAX_MOVE_M = 500;         // …if you've moved less than 500 m
+
   // ---------- state ----------
   let map, PlaceCls, RankPref, RouteMatrix, AdvMarker;
-  let myPos = null;            // last known device location
-  let searchCenter = null;     // where the last search ran
-  let stations = [];           // processed results of the last search
+  let myPos = null;
+  let nearList = [];        // GPS search (List tab)
+  let nearNote = "";
+  let areaList = null;      // last "Search this area" (Map tab); null = show nearList
   let markers = [], meMarker = null, infoWin = null;
+  let mapFittedToNear = false;
 
   // ---------- helpers ----------
   const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -169,36 +180,58 @@
   function moneyToNum(m) {
     if (m == null) return null;
     if (typeof m === "number") return m;
-    const u = Number(m.units ?? 0), n = Number(m.nanos ?? 0);
-    const v = u + n / 1e9;
+    const v = Number(m.units ?? 0) + Number(m.nanos ?? 0) / 1e9;
     return Number.isFinite(v) && v > 0 ? v : null;
+  }
+  function shortAddr(p) {
+    if (p.shortFormattedAddress) return p.shortFormattedAddress;
+    // Fallback: drop country, ZIP and state from "123 Main St, City, CA 92101, USA"
+    let a = p.formattedAddress || "";
+    a = a.replace(/,\s*(USA|United States)$/i, "");
+    a = a.replace(/,\s*[A-Z]{2}\s+\d{5}(-\d{4})?$/, "");
+    return a;
   }
   function ago(d) {
     if (!d) return "";
-    const t = (d instanceof Date ? d : new Date(d)).getTime();
+    const t = new Date(d).getTime();
     if (!Number.isFinite(t)) return "";
     const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
     if (mins < 60) return mins + "m ago";
     const h = Math.round(mins / 60);
-    if (h < 48) return h + "h ago";
-    return Math.round(h / 24) + "d ago";
+    return h < 48 ? h + "h ago" : Math.round(h / 24) + "d ago";
   }
-  const miles = m => (m / 1609.344);
+  function meters(a, b) {
+    const R = 6371000, toR = x => x * Math.PI / 180;
+    const dLat = toR(b.lat - a.lat), dLng = toR(b.lng - a.lng);
+    const h = Math.sin(dLat/2)**2 + Math.cos(toR(a.lat)) * Math.cos(toR(b.lat)) * Math.sin(dLng/2)**2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
   function fmtDrive(s) {
-    if (s.driveMeters == null) return s.routeFailed ? "No drive route" : "Drive distance…";
-    const mi = miles(s.driveMeters);
+    if (s.driveMeters == null) return s.routeFailed ? "No drive route" : (s.noRoute ? "" : "Drive distance…");
+    const mi = s.driveMeters / 1609.344;
     const min = Math.max(1, Math.round(s.driveSecs / 60));
     return (mi < 10 ? mi.toFixed(1) : Math.round(mi)) + " mi · " + min + " min drive";
   }
   const navUrl = s => "https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=" +
     s.lat + "," + s.lng + "&destination_place_id=" + encodeURIComponent(s.id);
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  function friendlyError(e, what) {
+    const m = String(e?.message || e || "");
+    if (/RESOURCE_EXHAUSTED|quota|429/i.test(m))
+      return what + " limit reached for today (the daily quota you set). It resets at midnight Pacific.";
+    if (/PERMISSION_DENIED|API key|not authorized|403/i.test(m))
+      return what + " was refused. Check the API is enabled and allowed on your key.";
+    return what + " failed: " + m;
+  }
 
   // ---------- Google Maps loading ----------
   function loadMaps(key) {
     return new Promise((resolve, reject) => {
       window.__gfReady = resolve;
-      window.gm_authFailure = () => setStatus("Google rejected the API key. Check it's valid, the three APIs are enabled, and this site is allowed under the key's restrictions.", true);
+      window.gm_authFailure = () => {
+        const m = "Google rejected the API key. Check it's valid, the three APIs are enabled, and this site is allowed under the key's restrictions.";
+        setStatus(m, true); setMapStatus(m, true);
+      };
       const s = document.createElement("script");
       s.src = "https://maps.googleapis.com/maps/api/js?key=" + encodeURIComponent(key) +
               "&v=weekly&loading=async&callback=__gfReady";
@@ -219,40 +252,58 @@
     ({ RouteMatrix } = await google.maps.importLibrary("routes"));
     ({ AdvancedMarkerElement: AdvMarker } = await google.maps.importLibrary("marker"));
 
-    const start = S.lastCenter || { lat: 39.5, lng: -98.35 };
     map = new Map($("map"), {
-      center: start, zoom: S.lastCenter ? 12 : 4, mapId: "DEMO_MAP_ID",
+      center: { lat: 39.5, lng: -98.35 }, zoom: 4, mapId: "DEMO_MAP_ID",
       disableDefaultUI: true, zoomControl: true, gestureHandling: "greedy", clickableIcons: false
     });
     infoWin = new google.maps.InfoWindow();
     map.addListener("dragend", () => { $("searchHere").style.display = "block"; });
+    map.addListener("zoom_changed", () => { if (mapFittedToNear || areaList) $("searchHere").style.display = "block"; });
 
-    locateAndSearch(true);
+    refreshNear(false);
   }
 
-  // ---------- location ----------
+  // ---------- GPS: 20 nearest stations (List tab) ----------
   function getPosition() {
     return new Promise((resolve, reject) => {
       if (!navigator.geolocation) return reject(new Error("no geolocation"));
       navigator.geolocation.getCurrentPosition(
         p => resolve({ lat: p.coords.latitude, lng: p.coords.longitude }),
-        err => reject(err), { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
+        reject, { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 });
     });
   }
-  async function locateAndSearch(initial=false) {
+
+  async function refreshNear(force) {
     setStatus("Finding your location…");
-    try {
-      myPos = await getPosition();
-      showMe();
-      map.setCenter(myPos); map.setZoom(12);
-      search(myPos);
-    } catch {
-      if (S.lastCenter) { setStatus(""); search(S.lastCenter); }
-      else setStatus(initial
-        ? "Location unavailable. Open the Map tab, move to an area and tap “Search this area”."
-        : "Couldn't get your location. Allow location access for this page, or search from the Map tab.", true);
+    try { myPos = await getPosition(); }
+    catch {
+      setStatus("Couldn't get your GPS location. Allow location access for this page, then tap 📍.", true);
+      return;
     }
+    showMe();
+
+    // Reuse a recent search from about the same spot (saves quota)
+    const cache = load("gasFinderNear", null);
+    if (!force && cache && Date.now() - cache.time < CACHE_MAX_AGE_MS && meters(cache.pos, myPos) < CACHE_MAX_MOVE_M) {
+      nearList = cache.stations; nearNote = cache.note || "";
+      renderList(); if (!areaList) { drawMarkers(); fitToNear(); }
+      return;
+    }
+
+    setStatus("Searching for the nearest stations…");
+    let res;
+    try { res = await searchStations(myPos, NEAR_RADIUS_M); }
+    catch (e) { setStatus(friendlyError(e, "Station search"), true); return; }
+    nearList = res.stations; nearNote = res.note;
+    renderList(); if (!areaList) { drawMarkers(); fitToNear(); }
+
+    // Drive distances for the list
+    const routeNote = await addDriveDistances(nearList, myPos);
+    nearNote = res.note + routeNote;
+    renderList(); if (!areaList) drawMarkers();
+    if (!routeNote) save("gasFinderNear", { time: Date.now(), pos: myPos, stations: nearList, note: nearNote });
   }
+
   function showMe() {
     if (!myPos || !map) return;
     const el = document.createElement("div"); el.className = "me";
@@ -260,125 +311,132 @@
     meMarker = new AdvMarker({ map, position: myPos, content: el, title: "You", zIndex: 1000 });
   }
 
-  // ---------- search ----------
-  let searchSeq = 0;
-  async function search(center) {
-    const seq = ++searchSeq;
-    searchCenter = center;
-    S.lastCenter = center; store.set(S);
-    $("searchHere").style.display = "none";
-    hiddenNote = ""; driveNote = "";
-    itemsEl.innerHTML = "";
-    setStatus("Searching for stations…");
-
-    let places;
-    try {
-      const radius = Math.min(50000, Math.max(1609, Math.round((Number(S.radiusMi) || 10) * 1609.344)));
-      ({ places } = await PlaceCls.searchNearby({
-        fields: ["id", "displayName", "location", "formattedAddress", "fuelOptions"],
-        locationRestriction: { center, radius },
-        includedPrimaryTypes: ["gas_station"],
-        maxResultCount: 20,
-        rankPreference: RankPref.DISTANCE
-      }));
-    } catch (e) {
-      if (seq === searchSeq) setStatus("Station search failed: " + (e.message || e) + " (Is Places API (New) enabled for this key?)", true);
-      return;
-    }
-    if (seq !== searchSeq) return;
-
-    let hiddenCount = 0;
-    stations = (places || []).filter(p => {
-      if (isBlocked(p.displayName)) { hiddenCount++; return false; }
-      return true;
-    }).map(p => {
+  // ---------- shared search ----------
+  async function searchStations(center, radius) {
+    const { places } = await PlaceCls.searchNearby({
+      fields: ["id", "displayName", "location", "shortFormattedAddress", "formattedAddress", "fuelOptions"],
+      locationRestriction: { center, radius: Math.round(Math.min(50000, Math.max(500, radius))) },
+      includedPrimaryTypes: ["gas_station"],
+      maxResultCount: 20,
+      rankPreference: RankPref.DISTANCE
+    });
+    let blocked = 0;
+    const stations = (places || []).filter(p => isBlocked(p.displayName) ? (blocked++, false) : true).map(p => {
       const prices = {};
       for (const fp of (p.fuelOptions?.fuelPrices || [])) {
         const v = moneyToNum(fp.price);
-        if (v != null) prices[String(fp.type)] = { price: v, updated: fp.updateTime };
+        if (v != null) prices[String(fp.type)] = { price: v, updated: fp.updateTime ? new Date(fp.updateTime).toISOString() : null };
       }
-      return {
-        id: p.id, name: p.displayName, addr: p.formattedAddress,
-        lat: p.location.lat(), lng: p.location.lng(), prices,
-        driveMeters: null, driveSecs: null, routeFailed: false
-      };
+      return { id: p.id, name: p.displayName, addr: shortAddr(p),
+               lat: p.location.lat(), lng: p.location.lng(), prices,
+               driveMeters: null, driveSecs: null, routeFailed: false, noRoute: false };
     });
+    const note = blocked ? ` · ${blocked} blocked hidden` : "";
+    return { stations, note, full: (places || []).length >= 20 };
+  }
 
-    hiddenNote = hiddenCount ? ` · ${hiddenCount} blocked station${hiddenCount > 1 ? "s" : ""} hidden` : "";
-    render();
-    fitMap();
-
-    // Driving distance from you (or from the search point if location is unknown)
-    const origin = myPos || center;
-    if (!stations.length) return;
+  async function addDriveDistances(list, origin) {
+    if (list.length < 2) {           // Routes matrix needs 2+ destinations
+      list.forEach(s => s.noRoute = true);
+      return "";
+    }
     try {
       const { matrix } = await RouteMatrix.computeRouteMatrix({
         origins: [origin],
-        destinations: stations.map(s => ({ lat: s.lat, lng: s.lng })),
+        destinations: list.map(s => ({ lat: s.lat, lng: s.lng })),
         travelMode: "DRIVING",
         fields: ["distanceMeters", "durationMillis", "condition"]
       });
-      if (seq !== searchSeq) return;
       const items = matrix?.rows?.[0]?.items || [];
       items.forEach((it, i) => {
-        const s = stations[i]; if (!s) return;
+        const s = list[i]; if (!s) return;
         if (it && it.distanceMeters != null && String(it.condition ?? "ROUTE_EXISTS") === "ROUTE_EXISTS") {
-          s.driveMeters = it.distanceMeters;
-          s.driveSecs = (it.durationMillis ?? 0) / 1000;
+          s.driveMeters = it.distanceMeters; s.driveSecs = (it.durationMillis ?? 0) / 1000;
         } else s.routeFailed = true;
       });
-      driveNote = myPos ? "" : " · drive distances from the search point (location off)";
+      return "";
     } catch (e) {
-      stations.forEach(s => s.routeFailed = true);
-      driveNote = " · drive distances unavailable (is Routes API enabled?)";
+      list.forEach(s => s.routeFailed = true);
+      return " · " + friendlyError(e, "Drive distance");
     }
-    render();
   }
-  let hiddenNote = "", driveNote = "";
+
+  // ---------- Map tab: search the visible area ----------
+  async function searchArea() {
+    $("searchHere").style.display = "none";
+    const c = map.getCenter(), b = map.getBounds();
+    const center = { lat: c.lat(), lng: c.lng() };
+    // radius = center to the nearer edge of the view, so results fill what you see
+    let radius = 50000;
+    if (b) {
+      const ne = b.getNorthEast(), sw = b.getSouthWest();
+      const halfH = meters(center, { lat: ne.lat(), lng: center.lng });
+      const halfW = meters(center, { lat: center.lat, lng: ne.lng() });
+      radius = Math.min(halfH, halfW, 50000);
+    }
+    setMapStatus("Searching this area…", false, true);
+    let res;
+    try { res = await searchStations(center, radius); }
+    catch (e) { setMapStatus(friendlyError(e, "Station search"), true); return; }
+    areaList = res.stations;
+    areaList.forEach(s => s.noRoute = true);   // map pins skip drive distances to save quota
+    drawMarkers();                              // keep the view where you put it
+    let msg = `${areaList.length} stations${res.note}`;
+    if (res.full) msg += " · only the 20 nearest the center. Zoom in for more detail.";
+    if (radius >= 50000) msg += " · search capped at 31 mi from center.";
+    setMapStatus(msg, false, res.full);
+  }
+
+  function fitToNear() {
+    if (!map || !nearList.length) return;
+    const b = new google.maps.LatLngBounds();
+    nearList.forEach(s => b.extend({ lat: s.lat, lng: s.lng }));
+    if (myPos) b.extend(myPos);
+    map.fitBounds(b, 40);
+    mapFittedToNear = true;
+    $("searchHere").style.display = "none";
+  }
 
   // ---------- rendering ----------
-  function sorted() {
+  function sortList(list) {
     const fuel = S.fuel;
-    let list = stations.slice();
-    if (S.hideNoPrice) list = list.filter(s => s.prices[fuel]);
+    let out = list.slice();
+    if (S.hideNoPrice) out = out.filter(s => s.prices[fuel]);
     const p = s => s.prices[fuel]?.price ?? Infinity;
     const d = s => s.driveMeters ?? Infinity;
-    list.sort(S.sort === "price" ? (a, b) => (p(a) - p(b)) || (d(a) - d(b))
-                                 : (a, b) => (d(a) - d(b)) || (p(a) - p(b)));
-    return list;
+    out.sort(S.sort === "price" ? (a, b) => (p(a) - p(b)) || (d(a) - d(b))
+                                : (a, b) => (d(a) - d(b)) || (p(a) - p(b)));
+    return out;
   }
+  const minPrice = list => Math.min(...list.map(s => s.prices[S.fuel]?.price ?? Infinity));
 
-  function render() {
-    const fuel = S.fuel, list = sorted();
-    const min = Math.min(...list.map(s => s.prices[fuel]?.price ?? Infinity));
+  function renderList() {
+    const fuel = S.fuel, list = sortList(nearList), min = minPrice(list);
     if (!list.length) {
       itemsEl.innerHTML = "";
-      setStatus(stations.length ? "No stations with a price for this fuel nearby." + hiddenNote
-                                : "No stations found in this area." + hiddenNote);
-    } else {
-      const priced = list.filter(s => s.prices[fuel]).length;
-      setStatus(`${list.length} stations · ${priced} with ${$("fuel").selectedOptions[0].text.toLowerCase()} prices${hiddenNote}${driveNote}`);
-      itemsEl.innerHTML = list.map(s => {
-        const fp = s.prices[fuel];
-        const best = fp && fp.price === min;
-        const price = fp
-          ? `<div class="price">$${fp.price.toFixed(2)}<small>${esc(ago(fp.updated))}</small></div>`
-          : `<div class="price none">No price</div>`;
-        return `<div class="st${best ? " best" : ""}">
-          <div class="name">${esc(s.name)}</div>${price}
-          <div class="addr">${esc(s.addr)}</div>
-          <div class="meta"><span class="drive">${esc(fmtDrive(s))}</span>
-            <a class="nav" href="${navUrl(s)}" target="_blank" rel="noopener">Navigate ›</a></div>
-        </div>`;
-      }).join("");
+      setStatus((nearList.length ? "No stations with a price for this fuel nearby." : "No stations found near you.") + nearNote);
+      return;
     }
-    drawMarkers(list, min);
+    const priced = list.filter(s => s.prices[fuel]).length;
+    setStatus(`${list.length} nearest stations · ${priced} with ${$("fuel").selectedOptions[0].text.toLowerCase()} prices${nearNote}`);
+    itemsEl.innerHTML = list.map(s => {
+      const fp = s.prices[fuel], best = fp && fp.price === min;
+      const price = fp
+        ? `<div class="price">$${fp.price.toFixed(2)}<small>${esc(ago(fp.updated))}</small></div>`
+        : `<div class="price none">No price</div>`;
+      return `<div class="st${best ? " best" : ""}">
+        <div class="name">${esc(s.name)}</div>${price}
+        <div class="addr">${esc(s.addr)}</div>
+        <div class="meta"><span>${esc(fmtDrive(s))}</span>
+          <a class="nav" href="${navUrl(s)}" target="_blank" rel="noopener">Navigate ›</a></div>
+      </div>`;
+    }).join("");
   }
 
-  function drawMarkers(list, min) {
+  function drawMarkers() {
     if (!map) return;
     markers.forEach(m => m.map = null); markers = [];
-    const fuel = S.fuel;
+    const list = sortList(areaList || nearList), min = minPrice(list), fuel = S.fuel;
     for (const s of list) {
       const fp = s.prices[fuel];
       const el = document.createElement("div");
@@ -386,20 +444,17 @@
       el.textContent = fp ? "$" + fp.price.toFixed(2) : "—";
       const m = new AdvMarker({ map, position: { lat: s.lat, lng: s.lng }, content: el, title: s.name, gmpClickable: true });
       m.addListener("click", () => {
-        infoWin.setContent(`<div class="iw"><b>${esc(s.name)}</b>${fp ? "$" + fp.price.toFixed(2) + " · " + esc(ago(fp.updated)) + "<br>" : ""}${esc(fmtDrive(s))}<br><a href="${navUrl(s)}" target="_blank" rel="noopener">Navigate ›</a></div>`);
+        const drive = fmtDrive(s);
+        infoWin.setContent(`<div class="iw"><b>${esc(s.name)}</b>${esc(s.addr)}<br>` +
+          (fp ? "$" + fp.price.toFixed(2) + " · " + esc(ago(fp.updated)) + "<br>" : "") +
+          (drive ? esc(drive) + "<br>" : "") +
+          `<a href="${navUrl(s)}" target="_blank" rel="noopener">Navigate ›</a></div>`);
         infoWin.open({ map, anchor: m });
       });
       markers.push(m);
     }
   }
-
-  function fitMap() {
-    if (!map || !stations.length) return;
-    const b = new google.maps.LatLngBounds();
-    stations.forEach(s => b.extend({ lat: s.lat, lng: s.lng }));
-    if (myPos) b.extend(myPos);
-    map.fitBounds(b, 40);
-  }
+  function renderAll() { renderList(); drawMarkers(); }
 
   // ---------- UI wiring ----------
   function showTab(which) {
@@ -411,16 +466,19 @@
   }
   $("tabList").onclick = () => showTab("list");
   $("tabMap").onclick = () => showTab("map");
-  $("fuel").onchange = e => { S.fuel = e.target.value; store.set(S); render(); };
-  $("sort").onchange = e => { S.sort = e.target.value; store.set(S); render(); };
-  $("locate").onclick = () => { if (map) locateAndSearch(); };
-  $("searchHere").onclick = () => { const c = map.getCenter(); search({ lat: c.lat(), lng: c.lng() }); };
+  $("fuel").onchange = e => { S.fuel = e.target.value; saveS(); renderAll(); };
+  $("sort").onchange = e => { S.sort = e.target.value; saveS(); renderAll(); };
+  $("locate").onclick = () => {
+    if (!map) return;
+    areaList = null; setMapStatus("");
+    refreshNear(true);
+  };
+  $("searchHere").onclick = () => searchArea();
 
   const dlg = $("settings");
   function openSettings() {
     $("apiKey").value = S.apiKey;
     $("blocklist").value = S.blocklist.join("\n");
-    $("radius").value = S.radiusMi;
     $("hideNoPrice").checked = !!S.hideNoPrice;
     if (dlg.showModal) dlg.showModal(); else dlg.setAttribute("open", "");
   }
@@ -429,14 +487,19 @@
   $("saveSettings").onclick = () => {
     const newKey = $("apiKey").value.trim();
     const keyChanged = newKey !== S.apiKey;
-    S.apiKey = newKey;
-    S.blocklist = $("blocklist").value.split("\n").map(x => x.trim()).filter(Boolean);
-    S.radiusMi = Math.min(31, Math.max(1, Number($("radius").value) || 10));
-    S.hideNoPrice = $("hideNoPrice").checked;
-    store.set(S);
+    const newBlock = $("blocklist").value.split("\n").map(x => x.trim()).filter(Boolean);
+    const blockChanged = newBlock.join("\n") !== S.blocklist.join("\n");
+    S.apiKey = newKey; S.blocklist = newBlock; S.hideNoPrice = $("hideNoPrice").checked;
+    saveS();
     dlg.close();
     if (keyChanged) { location.reload(); return; }
-    if (searchCenter) search(searchCenter);
+    if (blockChanged) {
+      // re-filter what we already have instead of spending a new search
+      nearList = nearList.filter(s => !isBlocked(s.name));
+      if (areaList) areaList = areaList.filter(s => !isBlocked(s.name));
+      save("gasFinderNear", null);
+    }
+    renderAll();
   };
 
   init();
